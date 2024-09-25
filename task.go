@@ -141,18 +141,12 @@ func WithBufferSize[V, R any](bufferSize int) runnerOpt[V, R] {
 	}
 }
 
-func WithFn[V, R any](fn func(context.Context, V) (R, error)) runnerOpt[V, R] {
-	return func(r *runner[V, R]) {
-		r.fn = fn
-	}
-}
-
-func NewRunner[V, R any](opts ...runnerOpt[V, R]) Runner[V, R] {
+func NewRunner[V, R any](fn func(context.Context, V) (R, error), opts ...runnerOpt[V, R]) Runner[V, R] {
 	r := &runner[V, R]{
 		workerSize: 10,
 		poolSize:   10,
-		bufferSize: 10000,
-		fn:         func(context.Context, V) (r R, err error) { return },
+		bufferSize: 100,
+		fn:         fn,
 		closed:     make(chan struct{}),
 	}
 

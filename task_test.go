@@ -11,12 +11,12 @@ import (
 func TestBasic(t *testing.T) {
 
 	runner := task.NewRunner(
+		func(ctx context.Context, name string) (string, error) {
+			return "Hello, " + name, nil
+		},
 		task.WithBufferSize[string, string](10),
 		task.WithPoolSize[string, string](10),
 		task.WithWorkerSize[string, string](10),
-		task.WithFn(func(ctx context.Context, name string) (string, error) {
-			return "Hello, " + name, nil
-		}),
 	)
 	defer runner.Close(context.Background())
 
