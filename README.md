@@ -23,7 +23,7 @@ A lightweight and efficient task runner designed to manage and execute tasks con
 To install the package, use the following command:
 
 ```bash
-go get github.com/ella-to/task
+go get ella.to/task
 ```
 
 # Usage
