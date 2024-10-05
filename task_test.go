@@ -2,54 +2,94 @@ package task_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"ella.to/task"
 )
 
-func TestBasic(t *testing.T) {
-
+func TestTaskRunnerWihtoutError(t *testing.T) {
 	runner := task.NewRunner(
-		func(ctx context.Context, name string) (string, error) {
-			return "Hello, " + name, nil
-		},
-		task.WithBufferSize[string, string](10),
-		task.WithPoolSize[string, string](10),
-		task.WithWorkerSize[string, string](10),
+		task.WithBufferSize(10),
+		task.WithWorkerSize(10),
 	)
-	defer runner.Close(context.Background())
+	defer runner.Close(context.TODO())
 
-	var wg sync.WaitGroup
-	var errs []error
+	future := runner.Submit(context.TODO(), func(ctx context.Context) error {
+		return nil
+	})
 
-	errs = make([]error, 10)
+	if err := future.Await(context.TODO()); err != nil {
+		t.Fatal(err)
+	}
+}
 
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			for i := 0; i < 100000; i++ {
-				result, err := runner.Submit(context.Background(), "Alice").Await(context.Background())
+func TestTaskRunnerWithError(t *testing.T) {
+	runner := task.NewRunner(
+		task.WithBufferSize(10),
+		task.WithWorkerSize(10),
+	)
+	defer runner.Close(context.TODO())
 
-				if err != nil {
-					errs[idx] = err
-					return
-				}
+	future := runner.Submit(context.TODO(), func(ctx context.Context) error {
+		return fmt.Errorf("error")
+	})
 
-				if result != "Hello, Alice" {
-					errs[idx] = fmt.Errorf("unexpected result: %s", result)
-				}
-			}
-		}(i)
+	if err := future.Await(context.TODO()); err == nil {
+		t.Fatal("expected error, got nil")
+	} else if err.Error() != "error" {
+		t.Fatalf("expected error, got %v", err)
+	}
+}
+
+func TestTaskRunnerClosed(t *testing.T) {
+	runner := task.NewRunner(
+		task.WithBufferSize(10),
+		task.WithWorkerSize(10),
+	)
+
+	var count atomic.Int64
+	future := runner.Submit(context.TODO(), func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(1 * time.Second):
+			count.Add(1)
+		}
+		return nil
+	})
+
+	runner.Close(context.TODO())
+
+	if err := future.Await(context.TODO()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected %v, got %v", context.Canceled, err)
 	}
 
-	wg.Wait()
+	if count.Load() > 0 {
+		t.Fatalf("expected 0, got %v", count.Load())
+	}
+}
 
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("worker %d: %v", i, err)
-		}
+func TestTaskRunnerMultiple(t *testing.T) {
+	runner := task.NewRunner(
+		task.WithBufferSize(1),
+		task.WithWorkerSize(10),
+	)
+
+	var count atomic.Int64
+	for i := 0; i < 100; i++ {
+		runner.Submit(context.TODO(), func(ctx context.Context) error {
+			count.Add(1)
+			return nil
+		})
+	}
+
+	runner.Close(context.TODO())
+
+	if count.Load() != 100 {
+		t.Fatalf("expected 100, got %v", count.Load())
 	}
 }

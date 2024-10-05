@@ -11,108 +11,68 @@ var (
 	ErrRunnerAlreadyClosed = errors.New("runner is already closed")
 )
 
-type Future[R any] interface {
-	Await(ctx context.Context) (R, error)
+type Future interface {
+	Await(ctx context.Context) error
 }
 
-type futureFunc[R any] func(ctx context.Context) (R, error)
+type futureFunc func(ctx context.Context) error
 
-var _ Future[any] = futureFunc[any](nil)
-
-func (f futureFunc[R]) Await(ctx context.Context) (R, error) {
+func (f futureFunc) Await(ctx context.Context) error {
 	return f(ctx)
 }
 
-func newFutureError[R any](err error) futureFunc[R] {
-	return func(ctx context.Context) (result R, _ error) {
-		return result, err
-	}
+type task struct {
+	ctx context.Context
+	fn  func(ctx context.Context) error
+	err chan error
 }
 
-type Runner[V, R any] interface {
-	Submit(ctx context.Context, value V) Future[R]
+type Runner interface {
+	Submit(ctx context.Context, fn func(context.Context) error) Future
 	Close(ctx context.Context) error
 }
 
-type task[V, R any] struct {
-	ctx    context.Context
-	value  V
-	result chan R
-	err    chan error
-}
-
-type runner[V, R any] struct {
+type runner struct {
 	workerSize int
-	poolSize   int
 	bufferSize int
-	fn         func(context.Context, V) (R, error)
-	tasks      chan *task[V, R]
-	tasksPool  chan *task[V, R]
+	tasks      chan *task
 	closed     chan struct{}
 	wg         sync.WaitGroup
 }
 
-var _ Runner[any, any] = (*runner[any, any])(nil)
+var _ Runner = (*runner)(nil)
 
-func (r *runner[V, R]) getTask(ctx context.Context) (*task[V, R], error) {
-	select {
-	case <-r.closed:
-		return nil, ErrRunnerClosed
-	case task := <-r.tasksPool:
-		return task, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-func (r *runner[V, R]) putTask(task *task[V, R]) {
-	select {
-	case <-r.closed:
-		return
-	case r.tasksPool <- task:
-	}
-}
-
-func (r *runner[V, R]) Submit(ctx context.Context, value V) Future[R] {
-	t, err := r.getTask(ctx)
-	if err != nil {
-		return newFutureError[R](err)
-	}
-
-	var cancel func()
-
-	t.ctx, cancel = context.WithCancel(ctx)
-	t.value = value
+// The given context will be passed to the submitted function.
+func (r *runner) Submit(ctx context.Context, fn func(context.Context) error) Future {
+	err := make(chan error, 1)
 
 	select {
 	case <-r.closed:
-		cancel()
-		return newFutureError[R](ErrRunnerClosed)
-	case r.tasks <- t:
+		err <- ErrRunnerClosed
+	default:
+		r.tasks <- &task{
+			ctx: ctx,
+			fn:  fn,
+			err: err,
+		}
 	}
 
-	return futureFunc[R](func(ctx context.Context) (result R, err error) {
-		defer r.putTask(t)
-		defer cancel()
-
+	return futureFunc(func(ctx context.Context) error {
 		select {
-		case <-r.closed:
-			return result, ErrRunnerClosed
 		case <-ctx.Done():
-			return result, ctx.Err()
-		case err = <-t.err:
-			return result, err
-		case result = <-t.result:
-			return result, nil
+			return ctx.Err()
+		case e := <-err:
+			return e
 		}
 	})
 }
 
-func (r *runner[V, R]) Close(ctx context.Context) error {
+func (r *runner) Close(ctx context.Context) error {
 	select {
 	case <-r.closed:
 		return ErrRunnerAlreadyClosed
 	default:
+		close(r.tasks)
 		close(r.closed)
 	}
 
@@ -121,32 +81,24 @@ func (r *runner[V, R]) Close(ctx context.Context) error {
 	return nil
 }
 
-type runnerOpt[V, R any] func(*runner[V, R])
+type runnerOpt func(*runner)
 
-func WithWorkerSize[V, R any](worker int) runnerOpt[V, R] {
-	return func(r *runner[V, R]) {
+func WithWorkerSize(worker int) runnerOpt {
+	return func(r *runner) {
 		r.workerSize = worker
 	}
 }
 
-func WithPoolSize[V, R any](poolSize int) runnerOpt[V, R] {
-	return func(r *runner[V, R]) {
-		r.poolSize = poolSize
-	}
-}
-
-func WithBufferSize[V, R any](bufferSize int) runnerOpt[V, R] {
-	return func(r *runner[V, R]) {
+func WithBufferSize(bufferSize int) runnerOpt {
+	return func(r *runner) {
 		r.bufferSize = bufferSize
 	}
 }
 
-func NewRunner[V, R any](fn func(context.Context, V) (R, error), opts ...runnerOpt[V, R]) Runner[V, R] {
-	r := &runner[V, R]{
+func NewRunner(opts ...runnerOpt) Runner {
+	r := &runner{
 		workerSize: 10,
-		poolSize:   10,
 		bufferSize: 100,
-		fn:         fn,
 		closed:     make(chan struct{}),
 	}
 
@@ -154,37 +106,32 @@ func NewRunner[V, R any](fn func(context.Context, V) (R, error), opts ...runnerO
 		opt(r)
 	}
 
-	r.tasks = make(chan *task[V, R], r.bufferSize)
-	r.tasksPool = make(chan *task[V, R], r.poolSize)
-
-	for range r.poolSize {
-		r.tasksPool <- &task[V, R]{
-			result: make(chan R, 1),
-			err:    make(chan error, 1),
-		}
+	if r.workerSize == 0 {
+		panic("worker size must be greater than 0, why are you even use this?")
 	}
 
+	r.tasks = make(chan *task, r.bufferSize)
+
 	r.wg.Add(r.workerSize)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		<-r.closed
+		cancel()
+	}()
 
 	for range r.workerSize {
 		go func() {
 			defer r.wg.Done()
 
 			for {
-				select {
-				case <-r.closed:
+				task, ok := <-r.tasks
+				if !ok {
 					return
-				case task, ok := <-r.tasks:
-					if !ok {
-						return
-					}
-					result, err := r.fn(task.ctx, task.value)
-					if err != nil {
-						task.err <- err
-					} else {
-						task.result <- result
-					}
 				}
+
+				task.err <- task.fn(NewMergedContext(task.ctx, ctx))
 			}
 		}()
 	}
