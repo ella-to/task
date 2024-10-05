@@ -11,6 +11,10 @@ var (
 	ErrRunnerAlreadyClosed = errors.New("runner is already closed")
 )
 
+// Future represents a task that will be executed in the future.
+// The Await function will block until the task is completed.
+// If the context passed to the Await function is canceled, the Await function will return but the task will still be executed.
+// if the task needs to be canceled, the context passed to the Submit function should be canceled.
 type Future interface {
 	Await(ctx context.Context) error
 }
@@ -28,7 +32,12 @@ type task struct {
 }
 
 type Runner interface {
+	// Submit a task to be executed by the runner's workers. the context passed to the Submit function will be merged with the runner's context.
+	// and the merged context will be passed to the submitted function. This ensures that if the runner is closed, the submitted function will
+	// be canceled.
 	Submit(ctx context.Context, fn func(context.Context) error) Future
+	// Close the runner and wait for all the submitted tasks to be completed.
+	// Calling this function again after closure will return ErrRunnerAlreadyClosed.
 	Close(ctx context.Context) error
 }
 
@@ -83,18 +92,30 @@ func (r *runner) Close(ctx context.Context) error {
 
 type runnerOpt func(*runner)
 
+// WithWorkerSize sets the number of workers that will be used to execute the submitted tasks.
+// if the worker size is less than or equal to 0, it will be set to 1.
 func WithWorkerSize(worker int) runnerOpt {
 	return func(r *runner) {
+		if worker < 0 {
+			worker = 1
+		}
 		r.workerSize = worker
 	}
 }
 
+// WithBufferSize sets the buffer size of the tasks channel.
+// if the buffer size is less than 0, it will be set to 1.
 func WithBufferSize(bufferSize int) runnerOpt {
 	return func(r *runner) {
+		if bufferSize < 0 {
+			bufferSize = 1
+		}
 		r.bufferSize = bufferSize
 	}
 }
 
+// NewRunner creates a new runner with the given options.
+// The default worker size is 10 and the default buffer size is 100.
 func NewRunner(opts ...runnerOpt) Runner {
 	r := &runner{
 		workerSize: 10,
@@ -104,10 +125,6 @@ func NewRunner(opts ...runnerOpt) Runner {
 
 	for _, opt := range opts {
 		opt(r)
-	}
-
-	if r.workerSize == 0 {
-		panic("worker size must be greater than 0, why are you even use this?")
 	}
 
 	r.tasks = make(chan *task, r.bufferSize)
