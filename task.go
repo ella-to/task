@@ -67,10 +67,25 @@ func (r *runner) Submit(ctx context.Context, fn func(context.Context) error) Fut
 	}
 
 	return futureFunc(func(ctx context.Context) error {
+	CHECK:
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case e := <-err:
+			if yeild, ok := e.(*yeild); ok {
+				select {
+				case <-r.closed:
+					err <- ErrRunnerClosed
+				default:
+					r.tasks <- &task{
+						ctx: yeild.ctx,
+						fn:  fn,
+						err: err,
+					}
+					goto CHECK
+				}
+			}
+
 			return e
 		}
 	})
@@ -154,4 +169,18 @@ func NewRunner(opts ...runnerOpt) Runner {
 	}
 
 	return r
+}
+
+type yeild struct {
+	ctx context.Context
+}
+
+var _ error = (*yeild)(nil)
+
+func (y *yeild) Error() string {
+	return ""
+}
+
+func Yeild(ctx context.Context) *yeild {
+	return &yeild{ctx}
 }

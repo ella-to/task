@@ -17,6 +17,7 @@ A lightweight and efficient task runner designed to manage and execute tasks con
 - [x] Task Scheduling: Supports scheduling tasks to run in the background.
 - [x] Context Management: Handle context propagation for better control over task lifecycle.
 - [x] Easy Integration: Seamlessly integrate into any Go project.
+- [x] Can yeild the function to future, similar to `runtime.Gosched()`
 
 # Installation
 

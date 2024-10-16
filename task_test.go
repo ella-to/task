@@ -93,3 +93,30 @@ func TestTaskRunnerMultiple(t *testing.T) {
 		t.Fatalf("expected 100, got %v", count.Load())
 	}
 }
+
+func TestYeild(t *testing.T) {
+	runner := task.NewRunner(
+		task.WithBufferSize(10),
+		task.WithWorkerSize(1),
+	)
+
+	count := 0
+	expectedCount := 1_000_000
+
+	err := runner.Submit(context.Background(), func(ctx context.Context) error {
+		if count < expectedCount {
+			count++
+			return task.Yeild(ctx)
+		}
+
+		return nil
+	}).Await(context.Background())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != expectedCount {
+		t.Fatalf("expected %d but got %d", expectedCount, count)
+	}
+}
