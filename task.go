@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 var (
@@ -77,6 +78,13 @@ func (r *runner) Submit(ctx context.Context, fn func(context.Context) error) Fut
 				case <-r.closed:
 					err <- ErrRunnerClosed
 				default:
+					if yeild.delay > 0 {
+						select {
+						case <-time.After(yeild.delay):
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+					}
 					r.tasks <- &task{
 						ctx: yeild.ctx,
 						fn:  fn,
@@ -172,7 +180,8 @@ func NewRunner(opts ...runnerOpt) Runner {
 }
 
 type yeild struct {
-	ctx context.Context
+	ctx   context.Context
+	delay time.Duration
 }
 
 var _ error = (*yeild)(nil)
@@ -181,6 +190,22 @@ func (y *yeild) Error() string {
 	return ""
 }
 
-func Yeild(ctx context.Context) *yeild {
-	return &yeild{ctx}
+type yeildOpt func(*yeild)
+
+func WithDelay(delay time.Duration) yeildOpt {
+	return func(y *yeild) {
+		y.delay = delay
+	}
+}
+
+func Yeild(ctx context.Context, opts ...yeildOpt) *yeild {
+	y := &yeild{
+		ctx: ctx,
+	}
+
+	for _, opt := range opts {
+		opt(y)
+	}
+
+	return y
 }

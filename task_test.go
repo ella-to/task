@@ -120,3 +120,28 @@ func TestYeild(t *testing.T) {
 		t.Fatalf("expected %d but got %d", expectedCount, count)
 	}
 }
+
+func TestYeildDelay(t *testing.T) {
+	runner := task.NewRunner(
+		task.WithBufferSize(10),
+		task.WithWorkerSize(1),
+	)
+
+	count := 0
+
+	err := runner.Submit(context.Background(), func(ctx context.Context) error {
+		if count < 10 {
+			count++
+
+			fmt.Println("count", count)
+			return task.Yeild(ctx, task.WithDelay(1*time.Second))
+		}
+
+		return nil
+	}).Await(context.Background())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+}
