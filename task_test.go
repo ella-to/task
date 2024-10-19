@@ -64,7 +64,7 @@ func TestTaskRunnerClosed(t *testing.T) {
 
 	runner.Close(context.TODO())
 
-	if err := future.Await(context.TODO()); !errors.Is(err, context.Canceled) {
+	if err := future.Await(context.TODO()); !errors.Is(err, task.ErrRunnerClosed) {
 		t.Fatalf("expected %v, got %v", context.Canceled, err)
 	}
 
@@ -144,4 +144,31 @@ func TestYeildDelay(t *testing.T) {
 		t.Fatal(err)
 	}
 
+}
+
+func TestYeildMultiple(t *testing.T) {
+	runner := task.NewRunner(
+		task.WithBufferSize(10),
+		task.WithWorkerSize(1),
+	)
+
+	i := 0
+	j := 0
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	runner.Submit(ctx, func(ctx context.Context) error {
+		i += 1
+		return task.Yeild(ctx, task.WithDelay(1*time.Second))
+	})
+
+	runner.Submit(ctx, func(ctx context.Context) error {
+		j += 1
+		return task.Yeild(ctx, task.WithDelay(1*time.Second))
+	})
+
+	<-ctx.Done()
+
+	fmt.Printf("i: %d, j: %d\n", i, j)
 }

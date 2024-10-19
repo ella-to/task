@@ -55,6 +55,7 @@ var _ Runner = (*runner)(nil)
 // The given context will be passed to the submitted function.
 func (r *runner) Submit(ctx context.Context, fn func(context.Context) error) Future {
 	err := make(chan error, 1)
+	futureErr := make(chan error, 1)
 
 	select {
 	case <-r.closed:
@@ -67,22 +68,23 @@ func (r *runner) Submit(ctx context.Context, fn func(context.Context) error) Fut
 		}
 	}
 
-	return futureFunc(func(ctx context.Context) error {
-	CHECK:
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case e := <-err:
-			if yeild, ok := e.(*yeild); ok {
-				select {
-				case <-r.closed:
-					err <- ErrRunnerClosed
-				default:
+	go func() {
+		for {
+			select {
+			case <-r.closed:
+				futureErr <- ErrRunnerClosed
+				return
+			case <-ctx.Done():
+				futureErr <- ctx.Err()
+				return
+			case e := <-err:
+				if yeild, ok := e.(*yeild); ok {
 					if yeild.delay > 0 {
 						select {
-						case <-time.After(yeild.delay):
 						case <-ctx.Done():
-							return ctx.Err()
+							futureErr <- ctx.Err()
+							return
+						case <-time.After(yeild.delay):
 						}
 					}
 					r.tasks <- &task{
@@ -90,10 +92,19 @@ func (r *runner) Submit(ctx context.Context, fn func(context.Context) error) Fut
 						fn:  fn,
 						err: err,
 					}
-					goto CHECK
+				} else {
+					futureErr <- e
+					return
 				}
 			}
+		}
+	}()
 
+	return futureFunc(func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case e := <-futureErr:
 			return e
 		}
 	})
