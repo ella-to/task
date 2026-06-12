@@ -158,17 +158,20 @@ func TestYeildMultiple(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 
-	runner.Submit(ctx, func(ctx context.Context) error {
+	f1 := runner.Submit(ctx, func(ctx context.Context) error {
 		i += 1
 		return task.Yeild(ctx, task.WithDelay(1*time.Second))
 	})
 
-	runner.Submit(ctx, func(ctx context.Context) error {
+	f2 := runner.Submit(ctx, func(ctx context.Context) error {
 		j += 1
 		return task.Yeild(ctx, task.WithDelay(1*time.Second))
 	})
 
-	<-ctx.Done()
+	// Wait for both tasks to resolve (with the ctx timeout) so reading i and
+	// j below does not race with the workers.
+	f1.Await(context.Background())
+	f2.Await(context.Background())
 
 	fmt.Printf("i: %d, j: %d\n", i, j)
 }
